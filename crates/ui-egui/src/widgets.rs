@@ -632,7 +632,22 @@ pub fn progress_notice(app: &PdfCraftApp, ctx: &egui::Context) -> bool {
     cancel
 }
 
+/// Set in custom builds: a published modified version carries no ArtCraft marks, so the two
+/// functions below draw nothing and their images are not in the binary at all.
+pub const CUSTOM_BUILD: bool = cfg!(craft_custom_build);
+
+#[cfg(craft_custom_build)]
+pub fn artcraft_logo(ui: &mut egui::Ui, _height: f32) -> Response {
+    ui.allocate_response(vec2(0.0, 0.0), Sense::hover())
+}
+
+#[cfg(craft_custom_build)]
+pub fn artcraft_mark(ui: &mut egui::Ui, _size: f32) -> Response {
+    ui.allocate_response(vec2(0.0, 0.0), Sense::hover())
+}
+
 /// The ArtCraft wordmark (Storyteller's brand, docs/brand/; not open source), sized to `height`.
+#[cfg(not(craft_custom_build))]
 pub fn artcraft_logo(ui: &mut egui::Ui, height: f32) -> Response {
     let dark = ui.visuals().dark_mode;
     let (uri, bytes): (&str, &'static [u8]) = if dark {
@@ -644,6 +659,7 @@ pub fn artcraft_logo(ui: &mut egui::Ui, height: f32) -> Response {
 }
 
 /// The ArtCraft mark (brand blue, works on light and dark), `size` points square.
+#[cfg(not(craft_custom_build))]
 pub fn artcraft_mark(ui: &mut egui::Ui, size: f32) -> Response {
     ui.add(
         egui::Image::from_bytes("bytes://artcraft-mark.svg", include_bytes!("../../../docs/brand/artcraft-mark.svg"))
