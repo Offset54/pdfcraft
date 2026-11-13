@@ -1,0 +1,105 @@
+# Unofficial custom builds (this fork only; never proposed upstream). Builds the custom/patches
+# branch for Windows x64 with the app's own packaging script, the same way the official release's
+# Windows job does, and publishes the MSI and portable ZIP as a GitHub pre-release. The custom
+# ArtCraft Launcher's local mirror downloads them from there.
+#
+# Built with CRAFT_CUSTOM_BUILD set: the app's own update check defers to the launcher, and the
+# ArtCraft marks are left out (docs/brand/LICENSE-brand.txt, "Forks and modified versions").
+# Unsigned (no signing secrets). Standard windows-latest runner: free for public repositories.
+name: Custom Windows build
+
+on:
+  push:
+    branches: [custom/patches]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: custom-windows
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      APP: ${{ github.event.repository.name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Work out the version and font pin
+        id: v
+        shell: bash
+        run: |
+          # [workspace.package] version is the official release the patches sit on (0.21.0); a
+          # custom build is the next patch's pre-release (0.21.1-custom.<run>), newer than that
+          # release and older than the next official one, which the patches then move onto.
+          base=$(awk '/^\[/{p=($0=="[workspace.package]")} p && /^version *=/{gsub(/[" ]/,"",$0); sub(/version=/,"",$0); print; exit}' Cargo.toml)
+          IFS=. read -r major minor patch <<<"${base%%-*}"
+          version="$major.$minor.$((patch + 1))-custom.$GITHUB_RUN_NUMBER"
+          fonts=$(grep -oE 'craft-fonts-ref: *[0-9a-f]{40}' .github/workflows/release.yml | grep -oE '[0-9a-f]{40}')
+          [ -n "$base" ] && [ -n "$fonts" ] || { echo "::error::couldn't read the version or the craft-fonts pin"; exit 1; }
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "date=$(date -u +%F)" >>"$GITHUB_OUTPUT"
+          echo "fonts=$fonts" >>"$GITHUB_OUTPUT"
+          echo "base=$base" >>"$GITHUB_OUTPUT"
+          echo "$APP $version (patches on $base, craft-fonts $fonts)"
+      - name: Export the app's build variables
+        uses: storytold/craft-common-actions/actions/export-app-build-env@main
+        with:
+          app-name: ${{ env.APP }}
+          version: ${{ steps.v.outputs.version }}
+          date: ${{ steps.v.outputs.date }}
+      - name: Check out craft-fonts
+        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@main
+        with:
+          ref: ${{ steps.v.outputs.fonts }}
+      - name: Check out craft-i18n
+        uses: storytold/craft-common-actions/actions/checkout-craft-i18n@main
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+        with:
+          key: custom-windows-x64
+      - name: Install WiX
+        uses: storytold/craft-common-actions/actions/install-wix@main
+      - name: Build and package
+        shell: pwsh
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+          CRAFT_CUSTOM_BUILD: ${{ steps.v.outputs.version }}
+        run: ./packaging/windows/package.ps1 -Arch x64
+      - name: Check that no ArtCraft mark is in the programs
+        shell: pwsh
+        run: |
+          $found = Get-ChildItem target/x86_64-pc-windows-msvc/release/*.exe | Where-Object {
+            [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($_.FullName)).Contains('bytes://artcraft-')
+          }
+          if ($found) { Write-Output "::error::ArtCraft marks embedded in $($found.Name -join ', ')"; exit 1 }
+      - name: Publish the pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+          BASE: ${{ steps.v.outputs.base }}
+        run: |
+          cd dist/release
+          sha256sum -- * > SHA256SUMS.txt
+          {
+            echo "Unofficial build with custom patches, based on ${APP} ${BASE} by the ArtCraft team."
+            echo "Not made or supported by the ArtCraft team. Unsigned."
+            echo
+            echo "Built from ${GITHUB_SHA}."
+          } > ../notes.md
+          gh release create "v${VERSION}" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "${APP} ${VERSION} (unofficial)" --notes-file ../notes.md \
+            -- *
