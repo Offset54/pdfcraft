@@ -849,6 +849,7 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
 
 /// The scroll speed and the middle button's direction, in Card 3.
 fn scrolling(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    crate::hotbar::scroll_speed_slider(ui, &mut app.scroll_speed);
     ui.horizontal(|ui| {
         ctx.label_primary(ui, tl!("Scroll speed (mouse wheel and arrow keys)"), t);
         ctx.pill_choice(
