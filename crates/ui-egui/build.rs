@@ -19,6 +19,13 @@ use std::fmt::Write as _;
 use serde_json::Value;
 
 fn main() {
+    // A custom build (CRAFT_CUSTOM_BUILD set) is a published modified version, so the ArtCraft
+    // marks are left out of it entirely (docs/brand/LICENSE-brand.txt, "Forks and modified versions").
+    println!("cargo::rustc-check-cfg=cfg(craft_custom_build)");
+    println!("cargo:rerun-if-env-changed=CRAFT_CUSTOM_BUILD");
+    if std::env::var_os("CRAFT_CUSTOM_BUILD").is_some_and(|v| !v.is_empty()) {
+        println!("cargo:rustc-cfg=craft_custom_build");
+    }
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contributors");
     let json = read(&dir.join("contributors.json"), "the About window shows no contributors", |t| {
         serde_json::from_str::<Value>(t).map_err(|e| e.to_string())
