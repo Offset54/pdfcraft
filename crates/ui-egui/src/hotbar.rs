@@ -345,6 +345,45 @@ fn core_tool_buttons(ui: &mut egui::Ui, app: &mut PdfCraftApp, cell: f32, popup_
             ui.close();
         }
     });
+    scroll_speed_button(ui, app, cell, popup_align, t);
+}
+
+/// Scroll speed ▸: a flyout with a slider for how far a wheel notch or arrow key scrolls, the
+/// same setting as Preferences ▸ Scroll speed, plus the Slow / Normal / Fast presets.
+fn scroll_speed_button(ui: &mut egui::Ui, app: &mut PdfCraftApp, cell: f32, popup_align: egui::RectAlign, t: &Tokens) {
+    use crate::scroll_speed::ScrollSpeed;
+    let changed = app.scroll_speed != ScrollSpeed::Normal;
+    let hint = format!("{} ({}%)", tl!("Scroll speed"), app.scroll_speed.percent());
+    let resp = ui.push_id("hotbar-scroll-speed", |ui| icons::button(ui, "gauge", cell, false, tl!("Scroll speed"))).inner.on_hover_text(hint);
+    let r = resp.rect;
+    let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
+    ui.painter().add(egui::Shape::convex_polygon(tri.to_vec(), if changed { t.accent } else { t.text_faint }, Stroke::NONE));
+    let open = resp.clicked() || resp.secondary_clicked();
+    egui::Popup::menu(&resp)
+        .open_memory(open.then_some(egui::SetOpenCommand::Toggle))
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .align(popup_align)
+        .gap(6.0)
+        .show(|ui| {
+            ui.set_width(220.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(tl!("Scroll speed")).size(13.0).strong().color(t.text));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(format!("{}%", app.scroll_speed.percent())).size(12.0).color(t.text_muted));
+                });
+            });
+            ui.add_space(4.0);
+            scroll_speed_slider(ui, &mut app.scroll_speed);
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                for preset in ScrollSpeed::ALL {
+                    let label = tl_ctx!("scroll speed", preset.label());
+                    if ui.selectable_label(app.scroll_speed == preset, label).clicked() {
+                        app.scroll_speed = preset;
+                    }
+                }
+            });
+        });
 }
 
 fn controls_divider(ui: &mut egui::Ui, t: &Tokens, vertical: bool) {
@@ -1169,5 +1208,21 @@ mod tests {
         assert!(matches_search(ink, "comment.ink"), "command ID must still match");
         assert!(!matches_search(ink, "introuvable"));
         crate::i18n::set_current(crate::i18n::Lang::EN);
+    }
+}
+
+/// The same continuous setting in Preferences and the hotbar flyout.
+pub(crate) fn scroll_speed_slider(ui: &mut egui::Ui, speed: &mut crate::scroll_speed::ScrollSpeed) {
+    use crate::scroll_speed::ScrollSpeed;
+    let mut percent = speed.percent();
+    let response = ui.add(
+        egui::Slider::new(&mut percent, ScrollSpeed::MIN_PERCENT..=ScrollSpeed::MAX_PERCENT)
+            .step_by(f64::from(ScrollSpeed::STEP_PERCENT))
+            .logarithmic(true)
+            .suffix("%")
+            .text(tl!("Scroll speed")),
+    );
+    if response.changed() {
+        *speed = ScrollSpeed::from_percent(percent);
     }
 }

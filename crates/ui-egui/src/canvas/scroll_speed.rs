@@ -15,6 +15,8 @@ pub enum ScrollSpeed {
     #[default]
     Normal,
     Fast,
+    /// A finer choice from the hotbar slider, in percent of Normal.
+    Custom(u16),
 }
 
 /// egui's own `line_scroll_speed`, which its wheel zoom rate is tuned against.
@@ -32,12 +34,17 @@ const NORMAL_LINE_POINTS: f32 = if cfg!(target_arch = "wasm32") {
 
 impl ScrollSpeed {
     pub const ALL: [Self; 3] = [Self::Slow, Self::Normal, Self::Fast];
+    /// The hotbar slider's range and step, in percent of Normal.
+    pub const MIN_PERCENT: u16 = 25;
+    pub const MAX_PERCENT: u16 = 400;
+    pub const STEP_PERCENT: u16 = 5;
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Slow => "Slow",
             Self::Normal => "Normal",
             Self::Fast => "Fast",
+            Self::Custom(_) => "Custom",
         }
     }
 
@@ -47,7 +54,21 @@ impl ScrollSpeed {
             Self::Slow => 0.5,
             Self::Normal => 1.0,
             Self::Fast => 2.0,
+            Self::Custom(percent) => f32::from(percent.clamp(Self::MIN_PERCENT, Self::MAX_PERCENT)) / 100.0,
         }
+    }
+
+    /// This speed in percent of Normal.
+    pub fn percent(self) -> u16 {
+        (self.factor() * 100.0).round() as u16
+    }
+
+    /// The speed at `percent` of Normal, clamped to the slider's range and step; the presets'
+    /// own percentages give back the presets.
+    pub fn from_percent(percent: u16) -> Self {
+        let step = Self::STEP_PERCENT;
+        let percent = (percent.clamp(Self::MIN_PERCENT, Self::MAX_PERCENT) + step / 2) / step * step;
+        Self::ALL.into_iter().find(|s| s.percent() == percent).unwrap_or(Self::Custom(percent))
     }
 
     /// Points one wheel line scrolls.
@@ -79,8 +100,13 @@ impl ScrollSpeed {
         }
     }
 
+    /// A preset's name, or a percentage of Normal such as `150` or `150%`.
     pub fn parse(value: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|s| s.label().eq_ignore_ascii_case(value))
+        let value = value.trim();
+        Self::ALL.into_iter().find(|s| s.label().eq_ignore_ascii_case(value)).or_else(|| {
+            let percent: u16 = value.strip_suffix('%').unwrap_or(value).trim().parse().ok()?;
+            (Self::MIN_PERCENT..=Self::MAX_PERCENT).contains(&percent).then(|| Self::from_percent(percent))
+        })
     }
 }
 
@@ -102,7 +128,7 @@ mod tests {
     #[test]
     fn zoom_keeps_egui_rate_and_scrolling_follows_the_choice() {
         let ctx = egui::Context::default();
-        for speed in ScrollSpeed::ALL {
+        for speed in ScrollSpeed::ALL.into_iter().chain([ScrollSpeed::Custom(25), ScrollSpeed::Custom(175), ScrollSpeed::Custom(400)]) {
             let mut raw = egui::RawInput {
                 events: vec![
                     wheel(egui::MouseWheelUnit::Line, 1.0, true),
@@ -122,5 +148,24 @@ mod tests {
         }
         assert_eq!(ScrollSpeed::parse("FAST"), Some(ScrollSpeed::Fast));
         assert_eq!(ScrollSpeed::parse("warp"), None);
+    }
+
+    #[test]
+    fn percentages_snap_to_presets_and_round_trip() {
+        assert_eq!(ScrollSpeed::from_percent(100), ScrollSpeed::Normal);
+        assert_eq!(ScrollSpeed::from_percent(52), ScrollSpeed::Slow);
+        assert_eq!(ScrollSpeed::from_percent(200), ScrollSpeed::Fast);
+        assert_eq!(ScrollSpeed::from_percent(137), ScrollSpeed::Custom(135));
+        assert_eq!(ScrollSpeed::from_percent(1), ScrollSpeed::Custom(ScrollSpeed::MIN_PERCENT));
+        assert_eq!(ScrollSpeed::from_percent(9999), ScrollSpeed::Custom(ScrollSpeed::MAX_PERCENT));
+        assert!((ScrollSpeed::Custom(150).factor() - 1.5).abs() < 1e-6);
+        assert_eq!(ScrollSpeed::parse("150%"), Some(ScrollSpeed::Custom(150)));
+        assert_eq!(ScrollSpeed::parse("50"), Some(ScrollSpeed::Slow));
+        assert_eq!(ScrollSpeed::parse("5000"), None);
+        for speed in [ScrollSpeed::Normal, ScrollSpeed::Custom(175)] {
+            let json = serde_json::to_value(speed).unwrap();
+            assert_eq!(serde_json::from_value::<ScrollSpeed>(json).unwrap(), speed);
+        }
+        assert_eq!(serde_json::to_value(ScrollSpeed::Fast).unwrap(), "fast", "presets keep their saved form");
     }
 }
