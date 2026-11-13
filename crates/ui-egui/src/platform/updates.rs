@@ -55,7 +55,7 @@ impl Default for Updates {
     fn default() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")),
+            updater: custom_build_updater(Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")), option_env!("CRAFT_CUSTOM_BUILD")),
             open: false,
             #[cfg(not(target_arch = "wasm32"))]
             startup_check: false,
@@ -67,6 +67,24 @@ impl Default for Updates {
             close_queued: false,
         }
     }
+}
+
+/// A custom build (built with `CRAFT_CUSTOM_BUILD` set to its label) never installs an official
+/// release from its own update check, which would drop the custom patches: it reads a
+/// version-choice file of its own that keeps this app on the launcher's track, so Help ▸ Check
+/// for updates says updates come from the launcher. An official build (`None`) is unchanged.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn custom_build_updater(updater: Updater, custom_build: Option<&str>) -> Updater {
+    let Some(label) = custom_build else { return updater };
+    let id = crate::UPDATE_APP.id;
+    let path = std::env::temp_dir().join(format!("craft-custom-build-{id}-versions.json"));
+    let body = serde_json::json!({ "apps": { id: { "Pinned": label } } }).to_string();
+    if let Err(e) = std::fs::write(&path, body) {
+        log::warn!("couldn't write {} ({e}); the update check stays off", path.display());
+    }
+    // A missing or damaged file would read as "follow stable releases", so the check at start is
+    // also never turned on for a custom build (`set_startup_update_check`).
+    updater.with_pins_path(path)
 }
 
 impl Updates {
@@ -113,7 +131,7 @@ impl PdfCraftApp {
     /// Whether the app asks for a newer release on its first frame (off until the desktop app turns it on).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_startup_update_check(&mut self, on: bool) {
-        self.updates.startup_check = on;
+        self.updates.startup_check = on && option_env!("CRAFT_CUSTOM_BUILD").is_none();
     }
 
     /// Replaces the network with `source` (tests).
@@ -221,6 +239,19 @@ mod tests {
     use pdfcraft_engine::{Edit, FieldValue};
     use std::path::PathBuf;
     use std::sync::Arc;
+
+    #[test]
+    fn a_custom_build_leaves_updates_to_its_launcher() {
+        use craft_update::pins::{Choice, Pins, VersionTrack};
+        let id = crate::UPDATE_APP.id;
+        let path = std::env::temp_dir().join(format!("craft-custom-build-{id}-versions.json"));
+        let _ = std::fs::remove_file(&path);
+        let official = custom_build_updater(Updater::new(&crate::UPDATE_APP, "0.21.0"), None);
+        assert!(official.managed().is_none());
+        assert!(!path.exists(), "an official build writes no version choice");
+        let _ = custom_build_updater(Updater::new(&crate::UPDATE_APP, "0.21.0"), Some("0.21.0-custom"));
+        assert_eq!(Pins::load(&path).choice(id), Choice::Managed(VersionTrack::Pinned("0.21.0-custom".into())));
+    }
 
     /// An app with one open document holding a form, and with `dirty` an unsaved change to it.
     fn app(dirty: bool) -> PdfCraftApp {
