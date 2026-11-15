@@ -70,6 +70,20 @@ jobs:
           key: custom-windows-x64
       - name: Install WiX
         uses: storytold/craft-common-actions/actions/install-wix@main
+      - name: Run the patches' tests
+        shell: bash
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+        run: |
+          # The patches are moved onto each official release without being compiled first, so this
+          # is where a patch the release broke is caught: nothing is published if a test fails.
+          case "$APP" in
+            pdfcraft)  pkgs="-p pdfcraft-ui-egui"; filters="scroll_speed custom_build" ;;
+            deckcraft) pkgs="-p deckcraft-engine -p deckcraft-ui-egui"; filters="crop custom_build" ;;
+            *) echo "::error::no patch tests are listed for $APP"; exit 1 ;;
+          esac
+          cargo test --locked --lib $pkgs -- $filters
       - name: Build and package
         shell: pwsh
         env:
